@@ -24,6 +24,8 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 
 `--inspect-first` 会列出当前可见的匹配任务，打开第一笔核对详情，再返回列表；不会点击“通过”或“同意”。确认界面和金额解析仍然正确后，双击 `start_safe_auth_refund_approver.command` 启动持续审批。启动器会编译到 `outputs/`，执行 `--approve --watch`；没有任务时每 10 秒检查一次。关闭终端或按 Control-C 停止。
 
+如果启动时报找不到“当前任务”，先运行 `./safe_auth_refund_approver --diagnose`。它只打印候选进程、辅助功能窗口数量，以及是否识别到“当前任务”，不会打开或审批任务。普通启动会最多等待约 10 秒，供 Safe Auth 的辅助功能窗口准备就绪。
+
 也可以限定本次最多同意的笔数：
 
 ```sh
@@ -81,6 +83,8 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 ```
 
 Inspection lists visible matching tasks, opens the first task to validate its details, and returns to the list. It never clicks Pass or Agree. After verifying that the UI and amount parsing are still correct, double-click `start_safe_auth_refund_approver.command` to compile into `outputs/` and run `--approve --watch`. It checks again every 10 seconds when no task is visible. Close the terminal or press Control-C to stop.
+
+If startup cannot find Current Tasks, run `./safe_auth_refund_approver --diagnose`. It only prints candidate processes, Accessibility window counts, and whether Current Tasks was detected; it never opens or approves a task. Normal startup waits up to about 10 seconds for Safe Auth's Accessibility window to become ready.
 
 To limit a run to one approval:
 

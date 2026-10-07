@@ -5,6 +5,11 @@ static NSString *const kBundle = @"com.safecoin.app";
 static NSString *const kTitle = @"汇信 - 总后台 - 金融卡四方退款";
 static NSString *const kType = @"金融卡四方退款(44)";
 
+static BOOL isSafeAuth(NSRunningApplication *candidate) {
+    return [[candidate bundleIdentifier] isEqualToString:kBundle] ||
+           [[candidate localizedName] isEqualToString:@"Safe Auth"];
+}
+
 static id attribute(AXUIElementRef element, CFStringRef name) {
     CFTypeRef value = NULL;
     if (AXUIElementCopyAttributeValue(element, name, &value) != kAXErrorSuccess) return nil;
@@ -167,36 +172,67 @@ static void fail(NSString *message) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        BOOL approve = NO, watch = NO, inspectFirst = NO;
+        BOOL approve = NO, watch = NO, inspectFirst = NO, diagnose = NO;
         NSInteger maxApprovals = NSIntegerMax;
         for (int i = 1; i < argc; i++) {
             NSString *argument = [NSString stringWithUTF8String:argv[i]];
             if ([argument isEqualToString:@"--approve"]) approve = YES;
             else if ([argument isEqualToString:@"--watch"]) watch = YES;
             else if ([argument isEqualToString:@"--inspect-first"]) inspectFirst = YES;
+            else if ([argument isEqualToString:@"--diagnose"]) diagnose = YES;
             else if ([argument isEqualToString:@"--max"] && i + 1 < argc) maxApprovals = MAX(1, atoi(argv[++i]));
             else fail([@"Unknown argument: " stringByAppendingString:argument]);
         }
+        if (diagnose && approve) fail(@"--diagnose cannot be combined with --approve");
         if (!AXIsProcessTrusted()) fail(@"Grant Accessibility access to the terminal, then retry");
 
         NSRunningApplication *app = nil;
         AXUIElementRef window = NULL;
-        for (NSRunningApplication *candidate in [[NSWorkspace sharedWorkspace] runningApplications]) {
-            if (![[candidate bundleIdentifier] isEqualToString:kBundle]) continue;
-            AXUIElementRef root = AXUIElementCreateApplication(candidate.processIdentifier);
-            NSArray *windows = attribute(root, kAXWindowsAttribute);
-            for (id possibleWindow in windows) {
-                NSArray *elements = snapshot((__bridge AXUIElementRef)possibleWindow);
-                if (elementNamed(elements, @"当前任务")) {
-                    app = candidate;
-                    window = CFRetain((__bridge AXUIElementRef)possibleWindow);
-                    break;
+        NSInteger candidates = 0;
+        for (NSInteger attempt = 0; attempt < (diagnose ? 1 : 50) && !window; attempt++) {
+            candidates = 0;
+            for (NSRunningApplication *candidate in [[NSWorkspace sharedWorkspace] runningApplications]) {
+                if (!isSafeAuth(candidate)) continue;
+                candidates++;
+                AXUIElementRef root = AXUIElementCreateApplication(candidate.processIdentifier);
+                CFTypeRef rawWindows = NULL;
+                AXError windowError = AXUIElementCopyAttributeValue(root, kAXWindowsAttribute, &rawWindows);
+                NSArray *windows = CFBridgingRelease(rawWindows);
+                if (diagnose) {
+                    printf("Safe Auth candidate: pid=%d name=%s bundle=%s AXWindows=%d count=%lu\n",
+                           candidate.processIdentifier,
+                           (candidate.localizedName ?: @"").UTF8String,
+                           (candidate.bundleIdentifier ?: @"").UTF8String,
+                           windowError, (unsigned long)windows.count);
                 }
+                for (id possibleWindow in windows) {
+                    NSArray *elements = snapshot((__bridge AXUIElementRef)possibleWindow);
+                    BOOL currentTasks = elementNamed(elements, @"当前任务") != nil;
+                    if (diagnose) {
+                        printf("  window: title=%s elements=%lu current_tasks=%s\n",
+                               [label((__bridge AXUIElementRef)possibleWindow) UTF8String],
+                               (unsigned long)elements.count, currentTasks ? "yes" : "no");
+                    }
+                    if (currentTasks) {
+                        app = candidate;
+                        window = CFRetain((__bridge AXUIElementRef)possibleWindow);
+                        break;
+                    }
+                }
+                CFRelease(root);
+                if (window) break;
             }
-            CFRelease(root);
-            if (window) break;
+            if (!window && !diagnose) usleep(200000);
         }
-        if (!window) fail(@"Open Safe Auth on the Current Tasks page, then retry");
+        if (!window) {
+            fprintf(stderr, "Safe Auth candidates found: %ld\n", (long)candidates);
+            fail(@"Could not read Safe Auth Current Tasks window; run --diagnose");
+        }
+        if (diagnose) {
+            puts("Current Tasks window detected. No task was opened or approved.");
+            CFRelease(window);
+            return 0;
+        }
 
         NSString *cwd = [[NSFileManager defaultManager] currentDirectoryPath];
         NSURL *logURL = [NSURL fileURLWithPath:[cwd stringByAppendingPathComponent:@"outputs/safe_auth_refund_approvals.jsonl"]];
