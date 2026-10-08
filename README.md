@@ -24,6 +24,8 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 
 `--inspect-first` 会列出当前可见的匹配任务，打开第一笔核对详情，再返回列表；不会点击“通过”或“同意”。确认界面和金额解析仍然正确后，双击 `start_safe_auth_refund_approver.command` 启动持续审批。启动器会编译到 `outputs/`，执行 `--approve --watch`；没有任务时每 10 秒检查一次。关闭终端或按 Control-C 停止。
 
+每次启动审批时，终端都会询问是否要求两笔退款金额一致。输入 `Y`：沿用原规则，只批准金额和币种完全一致的任务；输入 `N`：不比较两笔金额是否相等，金额不一致的任务也可能被批准。两种模式仍要求任务类型、任务 ID、订单号和金额字段可识别。必须明确输入 `Y` 或 `N`；空输入、错误输入或终端无输入都不会直接开始审批。选 `N` 前请确认这是你想承担的审批风险。
+
 如果启动时报找不到“当前任务”，先运行 `./safe_auth_refund_approver --diagnose`。它只打印候选进程、辅助功能窗口数量，以及是否识别到“当前任务”，不会打开或审批任务。普通启动会最多等待约 10 秒，供 Safe Auth 的辅助功能窗口准备就绪。
 
 也可以限定本次最多同意的笔数：
@@ -38,10 +40,10 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 
 1. 从可见任务中筛选指定任务名称，并从列表文本提取任务 ID。
 2. 打开详情，要求类型是 `金融卡四方退款(44)`、详情中出现同一任务 ID，且存在至少 12 位数字的订单号。
-3. 从详情中识别形如 `11.84 USDT` 的金额文本，取最后两个匹配项作为“卡商退款金额”和“人工操作退款金额”。只有金额字符串（含币种）完全一致才继续；不一致则记录并跳过。
+3. 从详情中识别形如 `11.84 USDT` 的金额文本，取最后两个匹配项作为“卡商退款金额”和“人工操作退款金额”。选 `Y` 时只有金额字符串（含币种）完全一致才继续，不一致则记录并跳过；选 `N` 时跳过相等比较。
 4. 点击“通过”，等待“是否同意”弹窗，先写入 `attempted` 日志，再点击“同意”。只有任务从当前列表消失后，才追加 `approved` 日志。
 
-日志位于 `outputs/safe_auth_refund_approvals.jsonl`，每行一条 JSON，包含时间、任务 ID、结果和金额。启动时会读取其中的 `attempted` / `approved` 任务 ID，避免自动重试结果不明确的任务。`skipped_mismatch` 只在当前运行中跳过；下一次启动仍可能再次检查。
+日志位于 `outputs/safe_auth_refund_approvals.jsonl`，每行一条 JSON，包含时间、任务 ID、结果、金额和本次 `amount_check` 模式（`required` 或 `bypassed`）。启动时会读取其中的 `attempted` / `approved` 任务 ID，避免自动重试结果不明确的任务。`skipped_mismatch` 只在当前运行中跳过；下一次启动仍可能再次检查。
 
 ### 用到的知识点
 
@@ -84,6 +86,8 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 
 Inspection lists visible matching tasks, opens the first task to validate its details, and returns to the list. It never clicks Pass or Agree. After verifying that the UI and amount parsing are still correct, double-click `start_safe_auth_refund_approver.command` to compile into `outputs/` and run `--approve --watch`. It checks again every 10 seconds when no task is visible. Close the terminal or press Control-C to stop.
 
+Every approval run asks whether the two refund amounts must match. Enter `Y` to keep the existing rule: approve only exact amount-and-currency matches. Enter `N` to skip the equality comparison, which can approve tasks whose amounts differ. Both modes still require a recognizable task type, task ID, order number, and amount fields. You must explicitly enter `Y` or `N`; an empty or invalid answer never starts approval. Understand the approval risk before choosing `N`.
+
 If startup cannot find Current Tasks, run `./safe_auth_refund_approver --diagnose`. It only prints candidate processes, Accessibility window counts, and whether Current Tasks was detected; it never opens or approves a task. Normal startup waits up to about 10 seconds for Safe Auth's Accessibility window to become ready.
 
 To limit a run to one approval:
@@ -98,10 +102,10 @@ Without `--approve`, the program does not submit approvals. `--watch` only contr
 
 1. Filter visible task rows by the configured task title and extract a task ID from the row text.
 2. Open the details and require type `金融卡四方退款(44)`, the same task ID, and an order number of at least 12 digits.
-3. Recognize amount strings such as `11.84 USDT`. Treat the last two matches as the merchant refund and manual refund. Continue only when both strings, including currency, are identical; otherwise log and skip.
+3. Recognize amount strings such as `11.84 USDT`. Treat the last two matches as the merchant refund and manual refund. With `Y`, continue only when both strings, including currency, are identical; otherwise log and skip. With `N`, skip this equality comparison.
 4. Click Pass, wait for the Agree dialog, write an `attempted` log entry, then click Agree. Append `approved` only after the task disappears from the current list.
 
-The append-only `outputs/safe_auth_refund_approvals.jsonl` log contains time, task ID, outcome, and amounts. On startup, `attempted` and `approved` IDs are loaded to avoid automatically retrying an uncertain outcome. `skipped_mismatch` is skipped only for the current process; it may be inspected again after restarting.
+The append-only `outputs/safe_auth_refund_approvals.jsonl` log contains time, task ID, outcome, amounts, and the `amount_check` mode (`required` or `bypassed`). On startup, `attempted` and `approved` IDs are loaded to avoid automatically retrying an uncertain outcome. `skipped_mismatch` is skipped only for the current process; it may be inspected again after restarting.
 
 ### Concepts used
 

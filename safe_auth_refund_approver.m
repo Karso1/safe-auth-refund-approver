@@ -128,14 +128,15 @@ static NSArray<NSString *> *refundAmounts(NSArray *details, NSString *identifier
     return @[merchant, manual];
 }
 
-static void writeLog(NSURL *url, NSString *identifier, NSString *outcome, NSString *amount) {
+static void writeLog(NSURL *url, NSString *identifier, NSString *outcome, NSString *amount, BOOL requireMatch) {
     [[NSFileManager defaultManager] createDirectoryAtURL:[url URLByDeletingLastPathComponent]
                            withIntermediateDirectories:YES attributes:nil error:nil];
     NSDictionary *entry = @{
         @"time": [[NSDate date] descriptionWithLocale:nil],
         @"task_id": identifier,
         @"outcome": outcome,
-        @"refund_amount": amount ?: @""
+        @"refund_amount": amount ?: @"",
+        @"amount_check": requireMatch ? @"required" : @"bypassed"
     };
     NSData *json = [NSJSONSerialization dataWithJSONObject:entry options:NSJSONWritingSortedKeys error:nil];
     NSMutableData *line = [json mutableCopy];
@@ -170,6 +171,26 @@ static void fail(NSString *message) {
     exit(1);
 }
 
+static BOOL askRequireMatch(void) {
+    while (YES) {
+        fputs("审批前要求两笔退款金额一致吗？Y=要求一致，N=跳过相等比较 [Y/N]: ", stdout);
+        fflush(stdout);
+        char *line = NULL;
+        size_t capacity = 0;
+        ssize_t length = getline(&line, &capacity, stdin);
+        if (length < 0) {
+            free(line);
+            fail(@"No amount-check choice received; no approval started");
+        }
+        NSString *answer = [[NSString alloc] initWithBytes:line length:(NSUInteger)length encoding:NSUTF8StringEncoding];
+        free(line);
+        answer = [[answer stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
+        if ([answer isEqualToString:@"Y"]) return YES;
+        if ([answer isEqualToString:@"N"]) return NO;
+        puts("请输入 Y 或 N；尚未开始审批。");
+    }
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         BOOL approve = NO, watch = NO, inspectFirst = NO, diagnose = NO;
@@ -184,6 +205,11 @@ int main(int argc, const char *argv[]) {
             else fail([@"Unknown argument: " stringByAppendingString:argument]);
         }
         if (diagnose && approve) fail(@"--diagnose cannot be combined with --approve");
+        BOOL requireMatch = YES;
+        if (approve) {
+            requireMatch = askRequireMatch();
+            printf("金额一致校验：%s\n", requireMatch ? "开启" : "关闭");
+        }
         if (!AXIsProcessTrusted()) fail(@"Grant Accessibility access to the terminal, then retry");
 
         NSRunningApplication *app = nil;
@@ -272,8 +298,8 @@ int main(int argc, const char *argv[]) {
             NSArray<NSString *> *amounts = details ? refundAmounts(details, identifier) : nil;
             if (!amounts) fail([@"Task ID, order number, or refund amount check failed: " stringByAppendingString:identifier]);
             NSString *amountSummary = [NSString stringWithFormat:@"merchant %@; manual %@", amounts[0], amounts[1]];
-            if (![amounts[0] isEqualToString:amounts[1]]) {
-                writeLog(logURL, identifier, @"skipped_mismatch", amountSummary);
+            if (requireMatch && ![amounts[0] isEqualToString:amounts[1]]) {
+                writeLog(logURL, identifier, @"skipped_mismatch", amountSummary, requireMatch);
                 [processed addObject:identifier];
                 id back = elementNamed(details, @"Back");
                 if (!back || !click((__bridge AXUIElementRef)back, app) || !waitFor(window, @"当前任务", 5)) {
@@ -287,7 +313,7 @@ int main(int argc, const char *argv[]) {
             NSArray *confirmation = waitFor(window, @"是否同意", 5);
             id agree = confirmation ? elementNamed(confirmation, @"同意") : nil;
             if (!agree) fail(@"Confirmation dialog missing");
-            writeLog(logURL, identifier, @"attempted", amountSummary);
+            writeLog(logURL, identifier, @"attempted", amountSummary, requireMatch);
             [processed addObject:identifier];
             if (!click((__bridge AXUIElementRef)agree, app)) fail(@"Cannot click Agree; inspect task before retrying");
             NSArray *list = waitFor(window, @"当前任务", 8);
@@ -299,7 +325,7 @@ int main(int argc, const char *argv[]) {
                 if ([row[@"id"] isEqualToString:identifier]) stillVisible = YES;
             }
             if (stillVisible) fail(@"Task still visible after approval; inspect Safe Auth before retrying");
-            writeLog(logURL, identifier, @"approved", amountSummary);
+            writeLog(logURL, identifier, @"approved", amountSummary, requireMatch);
             printf("Approved %s: %s\n", identifier.UTF8String, amountSummary.UTF8String);
             count++;
         }
