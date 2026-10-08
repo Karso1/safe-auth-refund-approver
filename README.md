@@ -22,7 +22,7 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 ./safe_auth_refund_approver --inspect-first
 ```
 
-`--inspect-first` 会列出当前可见的匹配任务，打开第一笔核对详情，再返回列表；不会点击“通过”或“同意”。确认界面和金额解析仍然正确后，双击 `start_safe_auth_refund_approver.command` 启动持续审批。启动器会编译到 `outputs/`，执行 `--approve --watch`；没有任务时每 10 秒检查一次。关闭终端或按 Control-C 停止。
+`--inspect-first` 会列出当前可见的匹配任务，打开第一笔核对详情，再返回列表；不会点击“通过”或“同意”。确认界面和金额解析仍然正确后，双击 `start_safe_auth_refund_approver.command` 启动持续审批。启动器会编译到 `outputs/`，执行 `--approve --watch`；处理完当前屏会自动向下滚动继续扫描。到底后回到顶部，每 10 秒检查新任务。关闭终端或按 Control-C 停止。
 
 每次启动审批时，终端都会询问是否要求两笔退款金额一致。输入 `Y`：沿用原规则，只批准金额和币种完全一致的任务；输入 `N`：不比较两笔金额是否相等，金额不一致的任务也可能被批准。两种模式仍要求任务类型、任务 ID、订单号和金额字段可识别。必须明确输入 `Y` 或 `N`；空输入、错误输入或终端无输入都不会直接开始审批。选 `N` 前请确认这是你想承担的审批风险。
 
@@ -56,13 +56,13 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 | 正则表达式 | 从任务行提取 ID，识别订单号和“数字 + 币种”的金额文本。 |
 | 状态校验与超时 | 每次关键点击后等待预期页面或弹窗；超时或状态不明时停止。 |
 | JSON Lines 审计日志与幂等保护 | 记录尝试/成功，并防止同一任务在结果不明确时被脚本自动重复提交。 |
-| 轮询 | `--watch` 模式下，无任务时每 10 秒重新读取当前可见任务。 |
+| 滚动与轮询 | 当前屏无待处理项时向下滚动，并用任务 ID 和位置确认列表变化；到底后回到顶部，`--watch` 每 10 秒检查新任务。 |
 
 ### 边界与风险
 
 - 金额比对依赖当前界面的文本顺序：代码**不是**按字段名定位金额，也不核对后台真实账务。若 UI 顺序或文案变化，先停止并重新测试。
 - 任务成功的判断是“从当前列表消失”，不是服务端最终入账或退款成功的证明。异常时需人工到 Safe Auth 核查。
-- 仅处理当前窗口中可见的任务，不负责翻页、登录、处理权限弹窗或电脑关机后的运行。
+- 自动滚动只针对 Safe Auth 当前任务列表；若界面布局变化导致列表无法滚动或识别，需停止并检查。脚本不负责登录、处理权限弹窗或电脑关机后的运行。
 - 日志可能包含任务 ID 和金额，请控制本机 `outputs/` 目录访问权限；该目录已被 `.gitignore` 排除。
 - 这个仓库没有附带开源许可证；公开可读不等于自动授予再分发或商用许可。
 
@@ -84,7 +84,7 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 ./safe_auth_refund_approver --inspect-first
 ```
 
-Inspection lists visible matching tasks, opens the first task to validate its details, and returns to the list. It never clicks Pass or Agree. After verifying that the UI and amount parsing are still correct, double-click `start_safe_auth_refund_approver.command` to compile into `outputs/` and run `--approve --watch`. It checks again every 10 seconds when no task is visible. Close the terminal or press Control-C to stop.
+Inspection lists visible matching tasks, opens the first task to validate its details, and returns to the list. It never clicks Pass or Agree. After verifying that the UI and amount parsing are still correct, double-click `start_safe_auth_refund_approver.command` to compile into `outputs/` and run `--approve --watch`. It scrolls down after finishing the current screen, returns to the top at the end, and checks for new tasks every 10 seconds. Close the terminal or press Control-C to stop.
 
 Every approval run asks whether the two refund amounts must match. Enter `Y` to keep the existing rule: approve only exact amount-and-currency matches. Enter `N` to skip the equality comparison, which can approve tasks whose amounts differ. Both modes still require a recognizable task type, task ID, order number, and amount fields. You must explicitly enter `Y` or `N`; an empty or invalid answer never starts approval. Understand the approval risk before choosing `N`.
 
@@ -118,12 +118,12 @@ The append-only `outputs/safe_auth_refund_approvals.jsonl` log contains time, ta
 | Regular expressions | Extract task IDs and recognize order numbers and currency amounts. |
 | State checks and timeouts | Wait for expected screens after actions; stop when the state is unclear. |
 | JSON Lines audit log and idempotency guard | Record attempts/results and avoid automatic resubmission of uncertain tasks. |
-| Polling | Re-scan currently visible tasks every 10 seconds in watch mode. |
+| Scrolling and polling | Scroll down when the current screen has no unprocessed tasks, confirm list movement using task IDs and positions, then return to the top and check again every 10 seconds in watch mode. |
 
 ### Limitations and risks
 
 - Amount matching depends on the current UI text order. It does **not** locate amounts by field name or verify backend ledger data. Re-test whenever the UI changes.
 - A task disappearing from the current list is only a UI-level success signal, not proof of a completed refund. Check Safe Auth manually after any ambiguous result.
-- It processes only tasks visible in the current window. It does not paginate, sign in, handle permission prompts, or run while the Mac is off.
+- Automatic scrolling targets Safe Auth's current task list. Stop and inspect if a UI layout change prevents scrolling or task recognition. It does not sign in, handle permission prompts, or run while the Mac is off.
 - The log can contain task IDs and amounts. Protect local access to `outputs/`; the directory is excluded by `.gitignore`.
 - No open-source license is included. Public visibility does not itself grant redistribution or commercial-use rights.

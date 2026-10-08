@@ -83,6 +83,43 @@ static CGPoint centerOf(AXUIElementRef element) {
     return CGPointMake(origin.x + dimensions.width / 2, origin.y + dimensions.height / 2);
 }
 
+static NSString *listFingerprint(NSArray *elements) {
+    NSMutableArray *rows = [NSMutableArray array];
+    for (id element in elements) {
+        NSString *identifier = taskID(label((__bridge AXUIElementRef)element));
+        if (!identifier) continue;
+        CGPoint point = centerOf((__bridge AXUIElementRef)element);
+        [rows addObject:[NSString stringWithFormat:@"%@:%ld", identifier, (long)point.y]];
+    }
+    return [rows componentsJoinedByString:@"|"];
+}
+
+static BOOL scrollList(AXUIElementRef window, NSRunningApplication *app, NSInteger pixels) {
+    NSArray *before = snapshot(window);
+    NSString *fingerprint = listFingerprint(before);
+    CGPoint point = centerOf(window);
+    id size = attribute(window, kAXSizeAttribute);
+    CGSize dimensions = CGSizeZero;
+    if (size && CFGetTypeID((__bridge CFTypeRef)size) == AXValueGetTypeID()) {
+        AXValueGetValue((__bridge AXValueRef)size, kAXValueCGSizeType, &dimensions);
+    }
+    if (point.x <= 0 || point.y <= 0 || dimensions.height <= 0) return NO;
+    point.y += dimensions.height * 0.18;
+    [app activateWithOptions:0];
+    CGEventRef event = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitPixel, 1, (int32_t)pixels);
+    if (!event) return NO;
+    CGEventSetLocation(event, point);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    for (NSInteger i = 0; i < 8; i++) {
+        usleep(250000);
+        NSArray *after = snapshot(window);
+        if (!elementNamed(after, @"当前任务")) return NO;
+        if (![listFingerprint(after) isEqualToString:fingerprint]) return YES;
+    }
+    return NO;
+}
+
 static BOOL click(AXUIElementRef element, NSRunningApplication *app) {
     [app activateWithOptions:0];
     usleep(100000);
@@ -288,6 +325,7 @@ int main(int argc, const char *argv[]) {
         NSURL *logURL = [NSURL fileURLWithPath:[cwd stringByAppendingPathComponent:@"outputs/safe_auth_refund_approvals.jsonl"]];
         NSMutableSet *processed = processedIDs(logURL);
         NSInteger count = 0;
+        NSInteger pagesWithoutApproval = 0;
         while (count < maxApprovals) {
             NSArray *elements = snapshot(window);
             if (!elementNamed(elements, @"当前任务")) fail(@"Current Tasks page changed");
@@ -311,7 +349,15 @@ int main(int argc, const char *argv[]) {
                 break;
             }
             if (tasks.count == 0) {
+                if (pagesWithoutApproval++ < 100 && scrollList(window, app, -550)) {
+                    puts("Scrolled to more tasks.");
+                    continue;
+                }
+                if (pagesWithoutApproval >= 100) fail(@"Stopped after 100 list pages; inspect Safe Auth");
                 if (!watch) break;
+                puts("Reached end of current task list; returning to top before checking for new tasks.");
+                for (NSInteger i = 0; i < 100 && scrollList(window, app, 2000); i++) {}
+                pagesWithoutApproval = 0;
                 sleep(10);
                 continue;
             }
@@ -346,6 +392,7 @@ int main(int argc, const char *argv[]) {
             writeLog(logURL, identifier, @"approved", amountSummary, requireMatch);
             printf("Approved %s: %s\n", identifier.UTF8String, amountSummary.UTF8String);
             count++;
+            pagesWithoutApproval = 0;
         }
         printf("Finished; approved %ld task(s).\n", (long)count);
         CFRelease(window);
