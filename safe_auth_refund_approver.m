@@ -174,8 +174,9 @@ static BOOL waitForApprovalResult(AXUIElementRef window, NSString *identifier, N
     return NO;
 }
 
-static NSArray<NSString *> *refundAmounts(NSArray *details, NSString *identifier) {
-    if (!elementNamed(details, kType) || !elementNamed(details, identifier)) return nil;
+static NSString *refundValidation(NSArray *details, NSString *identifier, NSArray<NSString *> **amounts) {
+    if (!elementNamed(details, kType)) return @"wrong task type";
+    if (!elementNamed(details, identifier)) return @"task ID mismatch";
     NSMutableArray<NSString *> *money = [NSMutableArray array];
     BOOL hasOrderNumber = NO;
     for (id element in details) {
@@ -183,10 +184,24 @@ static NSArray<NSString *> *refundAmounts(NSArray *details, NSString *identifier
         if (match(value, @"^[0-9,]+\\.[0-9]{2} [A-Z]{3,5}$")) [money addObject:value];
         if (match(value, @"^[0-9]{12,}$") && ![value isEqualToString:identifier]) hasOrderNumber = YES;
     }
-    if (!hasOrderNumber || money.count < 3) return nil;
+    if (!hasOrderNumber) return @"order number missing";
+    if (money.count < 3) return @"refund amounts missing";
     NSString *merchant = money[money.count - 2];
     NSString *manual = money[money.count - 1];
-    return @[merchant, manual];
+    *amounts = @[merchant, manual];
+    return nil;
+}
+
+static NSString *waitForRefundValidation(AXUIElementRef window, NSString *identifier,
+                                         NSArray<NSString *> **amounts) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    NSString *reason = nil;
+    do {
+        reason = refundValidation(snapshot(window), identifier, amounts);
+        if (!reason) return nil;
+        usleep(200000);
+    } while ([deadline timeIntervalSinceNow] > 0);
+    return reason;
 }
 
 static void writeLog(NSURL *url, NSString *identifier, NSString *outcome, NSString *amount, BOOL requireMatch) {
@@ -337,12 +352,13 @@ int main(int argc, const char *argv[]) {
                     NSString *identifier = first[@"id"];
                     if (!click((__bridge AXUIElementRef)first[@"element"], app)) fail(@"Cannot open first task");
                     NSArray *details = waitFor(window, kType, 5);
-                    NSArray<NSString *> *amounts = details ? refundAmounts(details, identifier) : nil;
+                    NSArray<NSString *> *amounts = nil;
+                    NSString *reason = details ? waitForRefundValidation(window, identifier, &amounts) : @"detail page missing";
                     id back = elementNamed(details, @"Back");
                     if (!back || !click((__bridge AXUIElementRef)back, app) || !waitFor(window, @"当前任务", 5)) {
                         fail(@"Could not return to task list");
                     }
-                    if (!amounts) fail([@"Detail validation failed: " stringByAppendingString:identifier]);
+                    if (reason) fail([NSString stringWithFormat:@"Detail validation failed %@: %@", identifier, reason]);
                     printf("Detail verified %s: merchant %s; manual %s\n",
                            identifier.UTF8String, amounts[0].UTF8String, amounts[1].UTF8String);
                 }
@@ -365,8 +381,22 @@ int main(int argc, const char *argv[]) {
             NSString *identifier = task[@"id"];
             if (!click((__bridge AXUIElementRef)task[@"element"], app)) fail(@"Cannot open refund task");
             NSArray *details = waitFor(window, kType, 5);
-            NSArray<NSString *> *amounts = details ? refundAmounts(details, identifier) : nil;
-            if (!amounts) fail([@"Task ID, order number, or refund amount check failed: " stringByAppendingString:identifier]);
+            if (!details) fail([@"Detail page missing: " stringByAppendingString:identifier]);
+            NSArray<NSString *> *amounts = nil;
+            NSString *reason = waitForRefundValidation(window, identifier, &amounts);
+            if (reason) {
+                if ([reason isEqualToString:@"wrong task type"] || [reason isEqualToString:@"task ID mismatch"]) {
+                    fail([NSString stringWithFormat:@"Unsafe task details %@: %@", identifier, reason]);
+                }
+                writeLog(logURL, identifier, @"skipped_invalid", reason, requireMatch);
+                [processed addObject:identifier];
+                id back = elementNamed(snapshot(window), @"Back");
+                if (!back || !click((__bridge AXUIElementRef)back, app) || !waitFor(window, @"当前任务", 5)) {
+                    fail(@"Could not return to task list after invalid details");
+                }
+                printf("Skipped invalid %s: %s\n", identifier.UTF8String, reason.UTF8String);
+                continue;
+            }
             NSString *amountSummary = [NSString stringWithFormat:@"merchant %@; manual %@", amounts[0], amounts[1]];
             if (requireMatch && ![amounts[0] isEqualToString:amounts[1]]) {
                 writeLog(logURL, identifier, @"skipped_mismatch", amountSummary, requireMatch);

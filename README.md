@@ -39,7 +39,7 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 ### 它检查什么
 
 1. 从可见任务中筛选指定任务名称，并从列表文本提取任务 ID。
-2. 打开详情，要求类型是 `金融卡四方退款(44)`、详情中出现同一任务 ID，且存在至少 12 位数字的订单号。
+2. 打开详情，要求类型是 `金融卡四方退款(44)`、详情中出现同一任务 ID，且存在至少 12 位数字的订单号。详情字段最多等待约 3 秒；类型或任务 ID 不符时停止，订单号或金额缺失时记录 `skipped_invalid` 并继续下一笔，不会批准该笔。
 3. 从详情中识别形如 `11.84 USDT` 的金额文本，取最后两个匹配项作为“卡商退款金额”和“人工操作退款金额”。选 `Y` 时只有金额字符串（含币种）完全一致才继续，不一致则记录并跳过；选 `N` 时跳过相等比较。
 4. 点击“通过”，等待“是否同意”弹窗，先写入 `attempted` 日志，再点击“同意”。最多等待 15 秒确认弹窗和详情页关闭，并连续确认任务不在当前列表，才追加 `approved` 日志；结果不明时停止且不自动重试。
 
@@ -101,7 +101,7 @@ Without `--approve`, the program does not submit approvals. `--watch` only contr
 ### Validation flow
 
 1. Filter visible task rows by the configured task title and extract a task ID from the row text.
-2. Open the details and require type `金融卡四方退款(44)`, the same task ID, and an order number of at least 12 digits.
+2. Open the details and require type `金融卡四方退款(44)`, the same task ID, and an order number of at least 12 digits. Wait up to about three seconds for detail fields. Stop on a type or task-ID mismatch; log `skipped_invalid` and continue without approving when the order number or amounts are missing.
 3. Recognize amount strings such as `11.84 USDT`. Treat the last two matches as the merchant refund and manual refund. With `Y`, continue only when both strings, including currency, are identical; otherwise log and skip. With `N`, skip this equality comparison.
 4. Click Pass, wait for the Agree dialog, write an `attempted` log entry, then click Agree. Wait up to 15 seconds for the dialog and detail view to close and repeatedly confirm the task is absent from the current list before appending `approved`. Stop without automatic retry if the outcome remains unclear.
 
