@@ -113,6 +113,30 @@ static NSArray *waitFor(AXUIElementRef window, NSString *name, NSTimeInterval se
     return nil;
 }
 
+static BOOL waitForApprovalResult(AXUIElementRef window, NSString *identifier, NSTimeInterval seconds) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:seconds];
+    NSInteger absentObservations = 0;
+    do {
+        NSArray *elements = snapshot(window);
+        BOOL onList = elementNamed(elements, @"当前任务") &&
+                      !elementNamed(elements, kType) &&
+                      !elementNamed(elements, @"是否同意");
+        BOOL taskPresent = NO;
+        if (onList) {
+            for (NSDictionary *row in visibleTasks(elements, [NSSet set])) {
+                if ([row[@"id"] isEqualToString:identifier]) {
+                    taskPresent = YES;
+                    break;
+                }
+            }
+        }
+        absentObservations = onList && !taskPresent ? absentObservations + 1 : 0;
+        if (absentObservations >= 3) return YES;
+        usleep(300000);
+    } while ([deadline timeIntervalSinceNow] > 0);
+    return NO;
+}
+
 static NSArray<NSString *> *refundAmounts(NSArray *details, NSString *identifier) {
     if (!elementNamed(details, kType) || !elementNamed(details, identifier)) return nil;
     NSMutableArray<NSString *> *money = [NSMutableArray array];
@@ -316,15 +340,9 @@ int main(int argc, const char *argv[]) {
             writeLog(logURL, identifier, @"attempted", amountSummary, requireMatch);
             [processed addObject:identifier];
             if (!click((__bridge AXUIElementRef)agree, app)) fail(@"Cannot click Agree; inspect task before retrying");
-            NSArray *list = waitFor(window, @"当前任务", 8);
-            if (!list) {
-                fail(@"Approval outcome unclear; inspect Safe Auth before retrying");
+            if (!waitForApprovalResult(window, identifier, 15)) {
+                fail(@"Approval outcome unclear after 15 seconds; inspect Safe Auth before retrying");
             }
-            BOOL stillVisible = NO;
-            for (NSDictionary *row in visibleTasks(list, [NSSet set])) {
-                if ([row[@"id"] isEqualToString:identifier]) stillVisible = YES;
-            }
-            if (stillVisible) fail(@"Task still visible after approval; inspect Safe Auth before retrying");
             writeLog(logURL, identifier, @"approved", amountSummary, requireMatch);
             printf("Approved %s: %s\n", identifier.UTF8String, amountSummary.UTF8String);
             count++;
