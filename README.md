@@ -41,7 +41,7 @@ clang -fobjc-arc -fno-modules -Wall -framework AppKit -framework ApplicationServ
 1. 从可见任务中筛选指定任务名称，并从列表文本提取任务 ID。
 2. 打开详情，要求类型是 `金融卡四方退款(44)`、详情中出现同一任务 ID，且存在至少 12 位数字的订单号。详情字段最多等待约 3 秒；类型或任务 ID 不符时停止，订单号或金额缺失时记录 `skipped_invalid` 并继续下一笔，不会批准该笔。
 3. 从详情中识别形如 `11.84 USDT` 的金额文本，取最后两个匹配项作为“卡商退款金额”和“人工操作退款金额”。选 `Y` 时只有金额字符串（含币种）完全一致才继续，不一致则记录并跳过；选 `N` 时跳过相等比较。
-4. 点击“通过”，等待“是否同意”弹窗，先写入 `attempted` 日志，再点击“同意”。最多等待 15 秒确认弹窗和详情页关闭，并连续确认任务不在当前列表，才追加 `approved` 日志；结果不明时停止且不自动重试。
+4. 点击“通过”，等待“是否同意”弹窗，先写入 `attempted` 日志，再点击“同意”。最多等待 15 秒确认任务不在当前列表，才追加 `approved` 日志。若 Safe Auth 显示“审核任务节点异常”，记录 `approval_error`，确认提示消失并返回列表后继续下一笔；无法安全返回或结果不明时停止，不自动重试该笔。
 
 日志位于 `outputs/safe_auth_refund_approvals.jsonl`，每行一条 JSON，包含时间、任务 ID、结果、金额和本次 `amount_check` 模式（`required` 或 `bypassed`）。启动时会读取其中的 `attempted` / `approved` 任务 ID，避免自动重试结果不明确的任务。`skipped_mismatch` 只在当前运行中跳过；下一次启动仍可能再次检查。
 
@@ -103,7 +103,7 @@ Without `--approve`, the program does not submit approvals. `--watch` only contr
 1. Filter visible task rows by the configured task title and extract a task ID from the row text.
 2. Open the details and require type `金融卡四方退款(44)`, the same task ID, and an order number of at least 12 digits. Wait up to about three seconds for detail fields. Stop on a type or task-ID mismatch; log `skipped_invalid` and continue without approving when the order number or amounts are missing.
 3. Recognize amount strings such as `11.84 USDT`. Treat the last two matches as the merchant refund and manual refund. With `Y`, continue only when both strings, including currency, are identical; otherwise log and skip. With `N`, skip this equality comparison.
-4. Click Pass, wait for the Agree dialog, write an `attempted` log entry, then click Agree. Wait up to 15 seconds for the dialog and detail view to close and repeatedly confirm the task is absent from the current list before appending `approved`. Stop without automatic retry if the outcome remains unclear.
+4. Click Pass, wait for the Agree dialog, write an `attempted` log entry, then click Agree. Confirm the task is absent from the list before appending `approved`. If Safe Auth reports an approval-node error, log `approval_error`, return safely to the list, and continue with the next task. Stop without retry if the page cannot be recovered or the outcome remains unclear.
 
 The append-only `outputs/safe_auth_refund_approvals.jsonl` log contains time, task ID, outcome, amounts, and the `amount_check` mode (`required` or `bypassed`). On startup, `attempted` and `approved` IDs are loaded to avoid automatically retrying an uncertain outcome. `skipped_mismatch` is skipped only for the current process; it may be inspected again after restarting.
 
