@@ -46,6 +46,14 @@ static id elementNamed(NSArray *elements, NSString *name) {
     return nil;
 }
 
+static BOOL hasApprovalNodeError(NSArray *elements) {
+    for (id element in elements) {
+        NSString *value = label((__bridge AXUIElementRef)element);
+        if ([value containsString:@"审核任务节点异常"]) return YES;
+    }
+    return NO;
+}
+
 static BOOL match(NSString *string, NSString *pattern) {
     return [string rangeOfString:pattern options:NSRegularExpressionSearch].location != NSNotFound;
 }
@@ -150,11 +158,12 @@ static NSArray *waitFor(AXUIElementRef window, NSString *name, NSTimeInterval se
     return nil;
 }
 
-static BOOL waitForApprovalResult(AXUIElementRef window, NSString *identifier, NSTimeInterval seconds) {
+static NSString *waitForApprovalResult(AXUIElementRef window, NSString *identifier, NSTimeInterval seconds) {
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:seconds];
     NSInteger absentObservations = 0;
     do {
         NSArray *elements = snapshot(window);
+        if (hasApprovalNodeError(elements)) return @"error";
         BOOL onList = elementNamed(elements, @"当前任务") &&
                       !elementNamed(elements, kType) &&
                       !elementNamed(elements, @"是否同意");
@@ -168,8 +177,28 @@ static BOOL waitForApprovalResult(AXUIElementRef window, NSString *identifier, N
             }
         }
         absentObservations = onList && !taskPresent ? absentObservations + 1 : 0;
-        if (absentObservations >= 3) return YES;
+        if (absentObservations >= 3) return @"approved";
         usleep(300000);
+    } while ([deadline timeIntervalSinceNow] > 0);
+    return @"unclear";
+}
+
+static BOOL returnToListAfterError(AXUIElementRef window, NSRunningApplication *app) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:8];
+    do {
+        NSArray *elements = snapshot(window);
+        if (hasApprovalNodeError(elements)) {
+            usleep(250000);
+            continue;
+        }
+        if (elementNamed(elements, @"是否同意")) return NO;
+        if (!elementNamed(elements, kType) && elementNamed(elements, @"当前任务")) return YES;
+        id back = elementNamed(elements, @"Back");
+        if (back && click((__bridge AXUIElementRef)back, app)) {
+            NSArray *list = waitFor(window, @"当前任务", 5);
+            if (list && !elementNamed(list, kType) && !hasApprovalNodeError(list)) return YES;
+        }
+        usleep(250000);
     } while ([deadline timeIntervalSinceNow] > 0);
     return NO;
 }
@@ -416,7 +445,16 @@ int main(int argc, const char *argv[]) {
             writeLog(logURL, identifier, @"attempted", amountSummary, requireMatch);
             [processed addObject:identifier];
             if (!click((__bridge AXUIElementRef)agree, app)) fail(@"Cannot click Agree; inspect task before retrying");
-            if (!waitForApprovalResult(window, identifier, 15)) {
+            NSString *result = waitForApprovalResult(window, identifier, 15);
+            if ([result isEqualToString:@"error"]) {
+                writeLog(logURL, identifier, @"approval_error", @"审核任务节点异常，请联系技术同学", requireMatch);
+                if (!returnToListAfterError(window, app)) {
+                    fail(@"Approval error logged, but could not safely return to task list");
+                }
+                printf("Skipped approval error %s: 审核任务节点异常，请联系技术同学\n", identifier.UTF8String);
+                continue;
+            }
+            if (![result isEqualToString:@"approved"]) {
                 fail(@"Approval outcome unclear after 15 seconds; inspect Safe Auth before retrying");
             }
             writeLog(logURL, identifier, @"approved", amountSummary, requireMatch);
